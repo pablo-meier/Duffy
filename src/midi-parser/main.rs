@@ -238,25 +238,18 @@ fn parse_ticks(buf : &[u8], offset : u32) -> (u32, u32) {
     loop {
         assert!(time_offset < 4);
         let curr = buf[offset + time_offset];
-        println!("curr is {}", curr);
-        println!("time_offset is {}", time_offset);
         time_buffer[time_offset] = (lower_seven_bits(curr) as u32);
-        println!("storing {} at position {}", time_buffer[time_offset], time_offset);
         if msb_is_one(curr) {
             time_offset += 1;
         } else {
             let mut loop_offset = 0;
             let mut time_ticks = 0;
             while loop_offset <= time_offset {
-                println!("Entered loop! time_ticks at {}", time_ticks);
                 let byte_correction = time_offset - loop_offset;
                 let contribution = (time_buffer[0 + loop_offset] << (8 * byte_correction)) >> byte_correction;
-                println!("Contribution is {}", contribution);
                 time_ticks = time_ticks | contribution;
-                println!("Value now at {}", time_ticks);
                 loop_offset += 1;
             }
-            println!("time_ticks is {}", time_ticks);
             return_value = (time_ticks, offset + time_offset + 1);
             break;
         }
