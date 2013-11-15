@@ -6,19 +6,24 @@
  * and the more comprehensive set of pages at 
  *
  * http://www.recordingblogs.com/sa/tabid/88/Default.aspx?topic=Musical+Instrument+Digital+Interface+(MIDI)
+ *
+ * The official MIDI spec is here:
+ *
+ * http://www.midi.org/techspecs/midispec.php
  */
 
-#[ name = "Rust MIDI" ]
-#[ vers = "0.1" ]
+#[name = "Rust MIDI"]
+#[vers = "0.1"]
 /// Package ID is name concatenated with vers, separated by space, fed to md5sum
-#[ package_id = "f34701c762288492b2e7f98f36922860" ]
+#[package_id = "f34701c762288492b2e7f98f36922860"]
 
-#[ desc = "MIDI library for rust. Provides programmatic access to data in MIDI files." ]
-#[ license = "GPL" ]
-#[ author = "Paul Meier" ]
-#[ crate_type = "lib" ]
+#[desc = "MIDI library for rust. Provides programmatic access to data in MIDI files."]
+#[license = "GPL"]
+#[author = "Paul Meier"]
+#[crate_type = "lib"]
 
-#[ warn(non_camel_case_types) ]
+#[warn(non_camel_case_types)]
+#[feature(struct_variant)]
 
 use std::option::{Some, None};
 use std::path::Path;
@@ -71,41 +76,44 @@ pub enum FileFormat {
 /// http://www.recordingblogs.com/sa/tabid/88/Default.aspx?topic=Status+byte+(of+a+MIDI+message)
 pub enum StatusByte {
     /// Release a note and stop playing it.
-    NoteOff = 0x80,
+    NoteOff { channel: u8, key : u8, velocity : u8},
     /// Play a note and start sounding it.
-    NoteOn = 0x90,
+    NoteOn { channel: u8, key : u8, velocity : u8},
     /// Apply pressure to a note playing, similar to applying pressure to electronic keyboard keys.
-    Aftertouch = 0xA0,
+    Aftertouch { channel: u8, key : u8, velocity : u8},
     /// Affect a controller, such as a slider, knob, or switch.
-    Controller = 0xB0,
+    ControlChange { channel: u8, controller : u8, value : u8},
     /// Assign a program to a MIDI channel, such as an instrument, patch, or preset.
-    ProgramChange = 0xC0,
+    ProgramChange { channel : u8, new_program : u8 },
     /// Apply pressure to a MIDI channel, similar to applying pressure to electronic keyboard keys.
-    ChannelPressure = 0xD0,
+    ChannelPressure { channel : u8, value : u8 },
     /// Change a channel pitch up or down.
-    PitchWheel = 0xE0,
+    PitchWheel { channel : u8, lsb : u8, msb : u8 },
+
     /// Perform some device specific task.
-    SystemExclusive = 0xF0,
+    SystemExclusive { amei : u32, nope : u8 },
     /// Set the MIDI time to keep in line with some other device.
-    MidiTimeCode = 0xF1,
+    MidiTimeCode { message_type : u8, values : u8 },
     /// Cue to a point in the MIDI sequence to be ready to play.
-    SongPositionPointer = 0xF2,
+    SongPositionPointer { lsb : u8, msb : u8 },
     /// Set a sequence for playback.
-    SongSelect = 0xF3,
+    SongSelect { song : u8 },
     /// Tune.
-    TuneRequest = 0xF6,
+    TuneRequest,
     /// Understand the position of the MIDI clock (when synchronized to another device).
-    MidiClock = 0xF8,
+    MidiClock,
     /// Start playback of some MIDI sequence.
-    MidiStart = 0xFA,
+    MidiStart,
     /// Resume playback of some MIDI sequence.
-    MidiContinue = 0xFB,
+    MidiContinue,
     /// Stop playback of some MIDI sequence.
-    MidiStop = 0xFC,
+    MidiStop,
     /// Understand that a MIDI connection exists (if there are no other MIDI messages).
-    ActiveSense = 0xFE,
+    ActiveSense,
     /// Reset to default state.
-    Reset = 0xFF
+    Reset,
+    /// Not a valid status, repeat previous message.
+    InvalidStatus
 }
 
 pub fn parse_file(filename : &str) -> Option<MidiFile> {
@@ -220,7 +228,7 @@ fn parse_event(buf : &[u8], offset : u32) -> Option<(MidiEvent, u32)> {
 // have more safety bits than the simple assert.
 // 
 // A small reminder of how MIDI Events work: you start with the number of ticks, followed by a MIDI
-// message. This parses the ticks, which is variable-length.
+// message. This parses the ticks, which is variable length.
 //
 // The number of ticks can be expressed with at least 1 and at most 4 bytes. All bytes must have a
 // '1' in the highest order position, except the last, which must have a 0. When you've read all the
@@ -229,12 +237,13 @@ fn parse_event(buf : &[u8], offset : u32) -> Option<(MidiEvent, u32)> {
 //
 // The code is a little hairy since making a bunch of 8-bit bytes into 7-bit bytes to combine to
 // some bitstring that is a multiple of 7... maybe my bitflip-foo isn't so good, but it's hard to
-// find a way to do it easily without allocating a binary buffer or something.
+// find a way to do it easily and 'elegantly.' Instead, I store them all into 32-bit values, and
+// once it's established how many there are (from time_offset) I combine them together by
+// bitshift + OR.
 fn parse_ticks(buf : &[u8], offset : u32) -> (u32, u32) {
-    println!("----------");
     let mut time_offset = 0;
     let mut time_buffer : [u32, ..4] = [0,0,0,0];
-    let mut return_value = (0,0);
+    let mut return_value;
     loop {
         assert!(time_offset < 4);
         let curr = buf[offset + time_offset];
@@ -257,17 +266,104 @@ fn parse_ticks(buf : &[u8], offset : u32) -> (u32, u32) {
     return_value
 }
 
+fn parse_message(buf : &[u8], offset : u32) -> Option<(MidiMessage, u32)> {
+    let status_byte = buf[offset];
+    let status_pattern = status_byte & 0xF0;
+    let channel_number = status_byte & 0x0F;
+    match status_pattern {
+        0x80 => {
+            let k = lower_seven_bits(buf[offset + 1]);
+            let v = lower_seven_bits(buf[offset + 2]);
+            Some(NoteOff{ channel : channel_number, key : k, velocity : v }, offset + 3)
+        }
+        0x90 => {
+            let k = lower_seven_bits(buf[offset + 1]);
+            let v = lower_seven_bits(buf[offset + 2]);
+            Some(NoteOn{ channel : channel_number, key : k, velocity : v }, offset + 3)
+        }
+        0xA0 => {
+            let k = lower_seven_bits(buf[offset + 1]);
+            let v = lower_seven_bits(buf[offset + 2]);
+            Some(Aftertouch{ channel : channel_number, key : k, velocity : v }, offset + 3)
+        }
+        0xB0 => {
+            let c = lower_seven_bits(buf[offset + 1]);
+            let v = lower_seven_bits(buf[offset + 2]);
+            Some(ControlChange{ channel : channel_number, controller : c, velocity : v }, offset + 3)
+        }
+        0xC0 => {
+            let p = lower_seven_bits(buf[offset + 1]);
+            Some(ProgramChange{ channel : channel_number, new_program : p }, offset + 2)
+        }
+        0xD0 => {
+            let v = lower_seven_bits(buf[offset + 1]);
+            Some(ChannelPressure{ channel : channel_number, value : v }, offset + 2)
+        }
+        0xE0 => {
+            let l = lower_seven_bits(buf[offset + 1]);
+            let m = lower_seven_bits(buf[offset + 2]);
+            Some(PitchWheel{ channel : channel_number, lsb : l, msb : m }, offset + 3)
+        }
+        0xF0 => {
+            match channel_number {
+                0x00 => {
+                    // We don't support MIDI with system exclusive commands, can't even parse it
+                    // since you don't know whether the AMEI is one or three bytes, nor do you know
+                    // the length of what follows.
+                    None
+                }
+                0x01 => {
+                    let mt = lower_seven_bits(buf[offset + 1]);
+                    let v = lower_seven_bits(buf[offset + 2]);
+                    Some(MidiTimeCode{ message_type : mt, values : v }, offset + 3)
+                }
+                0x02 => {
+                    let l = lower_seven_bits(buf[offset + 1]);
+                    let m = lower_seven_bits(buf[offset + 2]);
+                    Some(SongPositionPointer{ lsb : l, msb : m }, offset + 3)
+                }
+                0x03 => {
+                    let s = lower_seven_bits(buf[offset + 1]);
+                    Some(SongSelect{ song : s }, offset + 2)
+                }
+                0x06 => {
+                    Some(TuneRequest, offset + 1)
+                }
+                0x08 => {
+                    Some(MidiClock, offset + 1)
+                }
+                0x0A => {
+                    Some(MidiStart, offset + 1)
+                }
+                0x0B => {
+                    Some(MidiContinue, offset + 1)
+                }
+                0x0C => {
+                    Some(MidiStop, offset + 1)
+                }
+                0x0E => {
+                    Some(ActiveSense, offset + 1)
+                }
+                0x0F => {
+                    Some(Reset, offset + 1)
+                }
+            }
+        }
+        _ => {
+            Some(InvalidStatus, offset + 1)
+        }
+    }
+}
+
+
+
+
 fn msb_is_one(number : u8) -> bool {
     number > 127
 }
 fn lower_seven_bits(number : u8) -> u8 {
     number & 0b01111111
 }
-
-fn parse_message(buf : &[u8], offset : u32) -> Option<(MidiMessage, u32)> {
-  None
-}
-
 
 // Helper functions
 
