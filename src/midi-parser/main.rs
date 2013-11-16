@@ -68,6 +68,13 @@ pub enum FileFormat {
     MultipleAsynchronous = 3
 }
 
+/// Not public, this is the contextual data necessary to read a track -- some cases like "running
+/// mode" mean that you need to repeat the previous status. We store the contextual data here.
+struct ContinueTrackRead {
+    offset : u32,
+    last_status : u8
+}
+
 /// The various commands a MidiMessage can contain. Codes and descriptions lifted from 
 /// http://www.recordingblogs.com/sa/tabid/88/Default.aspx?topic=Status+byte+(of+a+MIDI+message)
 pub enum MidiMessage {
@@ -108,7 +115,7 @@ pub enum MidiMessage {
     ActiveSense,
     /// Reset to default state.
     Reset,
-    /// Not a valid status, repeat previous message.
+    /// Not a valid status, repeat previous message, per "running mode," where you can omit a status.
     InvalidStatus
 }
 
@@ -186,17 +193,19 @@ fn parse_track(buf : &[u8], offset : u32) -> Option<MidiTrack> {
         let mut event_offset = offset + 8;
         let mut midi_events = with_capacity(0);
         let mut error = false;
+        let mut cont = ContinueTrackRead { offset : event_offset, last_status : 0x00 };
         // events in sequence.
         while event_offset <= ((offset + 4) + track_size) {
-            match parse_event(buf, event_offset) {
+            match parse_event(buf, cont) {
                 None => {
                     error!("Malformed event, somewhere near offset {}", event_offset);
                     error = true;
                     break;
                 }
-                Some((x, new_offset)) => {
+                Some((x, new_cont)) => {
                     midi_events = append_one(midi_events, x);
-                    event_offset = new_offset
+                    cont = new_cont;
+                    event_offset = cont.offset;
                 }
             }
         }
@@ -207,13 +216,14 @@ fn parse_track(buf : &[u8], offset : u32) -> Option<MidiTrack> {
     }
 }
 
-fn parse_event(buf : &[u8], offset : u32) -> Option<(MidiEvent, u32)> {
-    match parse_ticks(buf, offset) {
+fn parse_event(buf : &[u8], cont : ContinueTrackRead) -> Option<(MidiEvent, ContinueTrackRead)> {
+    match parse_ticks(buf, cont.offset) {
         (ticks, new_offset) => {
-           match parse_message(buf, new_offset) {
+           match parse_message(buf, new_offset, cont.last_status) {
                None => { None }
                Some((message, new_offset)) => { 
-                    Some((MidiEvent{ delta_time : ticks, message : message }, new_offset))
+                    Some((MidiEvent{ delta_time : ticks, message : message },
+                         ContinueTrackRead{ offset : new_offset, last_status : get_status_byte(message) }))
                }
            }
         }
@@ -262,43 +272,53 @@ fn parse_ticks(buf : &[u8], offset : u32) -> (u32, u32) {
     return_value
 }
 
-fn parse_message(buf : &[u8], offset : u32) -> Option<(MidiMessage, u32)> {
-    let status_byte = buf[offset];
+fn parse_message(buf : &[u8], start_offset : u32, last_status : u8) -> Option<(MidiMessage, u32)> {
+
+    let mut status_byte;
+    let mut data_offset;
+    if is_invalid_status_byte(buf[start_offset]) {
+        status_byte = last_status;
+        data_offset = start_offset;
+    } else {
+        status_byte = buf[start_offset];
+        data_offset = start_offset + 1;
+    }
+
     let status_pattern = status_byte & 0xF0;
     let channel_number = status_byte & 0x0F;
     match status_pattern {
         0x80 => {
-            let k = lower_seven_bits(buf[offset + 1]);
-            let v = lower_seven_bits(buf[offset + 2]);
-            Some((NoteOff{ channel : channel_number, key : k, velocity : v }, offset + 3))
+            let k = lower_seven_bits(buf[data_offset]);
+            let v = lower_seven_bits(buf[data_offset + 1]);
+            Some((NoteOff{ channel : channel_number, key : k, velocity : v }, data_offset + 2))
         }
         0x90 => {
-            let k = lower_seven_bits(buf[offset + 1]);
-            let v = lower_seven_bits(buf[offset + 2]);
-            Some((NoteOn{ channel : channel_number, key : k, velocity : v }, offset + 3))
+            let k = lower_seven_bits(buf[data_offset]);
+            let v = lower_seven_bits(buf[data_offset + 1]);
+            Some((NoteOn{ channel : channel_number, key : k, velocity : v }, data_offset + 2))
         }
         0xA0 => {
-            let k = lower_seven_bits(buf[offset + 1]);
-            let v = lower_seven_bits(buf[offset + 2]);
-            Some((Aftertouch{ channel : channel_number, key : k, velocity : v }, offset + 3))
+            let k = lower_seven_bits(buf[data_offset]);
+            let v = lower_seven_bits(buf[data_offset + 1]);
+            Some((Aftertouch{ channel : channel_number, key : k, velocity : v }, data_offset + 2))
         }
         0xB0 => {
-            let c = lower_seven_bits(buf[offset + 1]);
-            let v = lower_seven_bits(buf[offset + 2]);
-            Some((ControlChange{ channel : channel_number, controller : c, value : v }, offset + 3))
+            let c = lower_seven_bits(buf[data_offset]);
+            let v = lower_seven_bits(buf[data_offset + 1]);
+            Some((ControlChange{ channel : channel_number, controller : c, value : v }, data_offset + 2))
         }
         0xC0 => {
-            let p = lower_seven_bits(buf[offset + 1]);
-            Some((ProgramChange{ channel : channel_number, new_program : p }, offset + 2))
+            let p = lower_seven_bits(buf[data_offset]);
+            Some((ProgramChange{ channel : channel_number, new_program : p }, data_offset + 1))
         }
         0xD0 => {
-            let v = lower_seven_bits(buf[offset + 1]);
-            Some((ChannelPressure{ channel : channel_number, value : v }, offset + 2))
+            let v = lower_seven_bits(buf[data_offset]);
+            Some((ChannelPressure{ channel : channel_number, value : v }, data_offset + 1))
         }
         0xE0 => {
-            let l = lower_seven_bits(buf[offset + 1]);
-            let m = lower_seven_bits(buf[offset + 2]);
-            Some((PitchWheel{ channel : channel_number, lsb : l, msb : m }, offset + 3))
+            let l = lower_seven_bits(buf[data_offset]);
+            let m = lower_seven_bits(buf[data_offset + 1]);
+            Some((PitchWheel{ channel : channel_number, lsb : l, msb : m }, data_offset + 2))
         }
         0xF0 => {
             match channel_number {
@@ -309,55 +329,82 @@ fn parse_message(buf : &[u8], offset : u32) -> Option<(MidiMessage, u32)> {
                     None
                 }
                 0x01 => {
-                    let mt = lower_seven_bits(buf[offset + 1]);
-                    let v = lower_seven_bits(buf[offset + 2]);
-                    Some((MidiTimeCode{ message_type : mt, values : v }, offset + 3))
+                    let mt = lower_seven_bits(buf[data_offset]);
+                    let v = lower_seven_bits(buf[data_offset + 1]);
+                    Some((MidiTimeCode{ message_type : mt, values : v }, data_offset + 2))
                 }
                 0x02 => {
-                    let l = lower_seven_bits(buf[offset + 1]);
-                    let m = lower_seven_bits(buf[offset + 2]);
-                    Some((SongPositionPointer{ lsb : l, msb : m }, offset + 3))
+                    let l = lower_seven_bits(buf[data_offset]);
+                    let m = lower_seven_bits(buf[data_offset + 1]);
+                    Some((SongPositionPointer{ lsb : l, msb : m }, data_offset + 2))
                 }
                 0x03 => {
-                    let s = lower_seven_bits(buf[offset + 1]);
-                    Some((SongSelect{ song : s }, offset + 2))
+                    let s = lower_seven_bits(buf[data_offset]);
+                    Some((SongSelect{ song : s }, data_offset + 1))
                 }
                 0x06 => {
-                    Some((TuneRequest, offset + 1))
+                    Some((TuneRequest, data_offset))
                 }
                 0x08 => {
-                    Some((MidiClock, offset + 1))
+                    Some((MidiClock, data_offset))
                 }
                 0x0A => {
-                    Some((MidiStart, offset + 1))
+                    Some((MidiStart, data_offset))
                 }
                 0x0B => {
-                    Some((MidiContinue, offset + 1))
+                    Some((MidiContinue, data_offset))
                 }
                 0x0C => {
-                    Some((MidiStop, offset + 1))
+                    Some((MidiStop, data_offset))
                 }
                 0x0E => {
-                    Some((ActiveSense, offset + 1))
+                    Some((ActiveSense, data_offset))
                 }
                 0x0F => {
-                    Some((Reset, offset + 1))
+                    Some((Reset, data_offset))
                 }
                 _ => { None }
             }
         }
         _ => {
-            Some((InvalidStatus, offset + 1))
+            Some((InvalidStatus, data_offset))
         }
     }
 }
 
-
-fn msb_is_one(number : u8) -> bool {
-    number > 127
+fn is_invalid_status_byte(byte : u8) -> bool {
+    match byte {
+        0 .. 0x7F | 0xF4 | 0xF5 | 0xF7 | 0xF9 => true,
+        _ => false
+    }
 }
-fn lower_seven_bits(number : u8) -> u8 {
-    number & 0b01111111
+
+
+fn get_status_byte(message : MidiMessage) -> u8 {
+    match message {
+        NoteOff         { channel : c, _ } => { 0x80 | c }
+        NoteOn          { channel : c, _ } => { 0x90 | c }
+        Aftertouch      { channel : c, _ } => { 0xA0 | c }
+        ControlChange   { channel : c, _ } => { 0xB0 | c }
+        ProgramChange   { channel : c, _ } => { 0xC0 | c }
+        ChannelPressure { channel : c, _ } => { 0xD0 | c }
+        PitchWheel      { channel : c, _ } => { 0xE0 | c }
+
+        SystemExclusive     {_} => { 0xF0 }
+        MidiTimeCode        {_} => { 0xF1 }
+        SongPositionPointer {_} => { 0xF2 }
+        SongSelect          {_} => { 0xF3 }
+        TuneRequest             => { 0xF6 }
+        MidiClock               => { 0xF8 }
+        MidiStart               => { 0xFA }
+        MidiContinue            => { 0xFB }
+        MidiStop                => { 0xFC }
+        ActiveSense             => { 0xFE }
+        Reset                   => { 0xFF }
+        // InvalidStatus gets an invalid Midi Message, but only for completeness.
+        // Should never happen.
+        _ => { 0xFD }
+    }
 }
 
 // Helper functions
@@ -389,6 +436,14 @@ fn file_format_from_u16(value : u16) -> Option<FileFormat> {
         _ => None
     }
 }
+
+fn msb_is_one(number : u8) -> bool {
+    number > 127
+}
+fn lower_seven_bits(number : u8) -> u8 {
+    number & 0b01111111
+}
+
 
 // Writing
 // Undefined for now, since we just want to read.
@@ -470,7 +525,7 @@ fn test_parse_ticks_hard() {
 #[test]
 fn test_parse_event_one() {
     let test_buf = [0x88, 0x05, 0x03];
-    match parse_message(test_buf, 0) {
+    match parse_message(test_buf, 0, 0x80) {
         Some((NoteOff{channel : c, key : k, velocity : v}, 3)) => {
             assert!(c == 8);
             assert!(k == 5);
@@ -483,7 +538,7 @@ fn test_parse_event_one() {
 #[test]
 fn test_parse_event_two() {
     let test_buf = [0xA3, 0x04, 0x09];
-    match parse_message(test_buf, 0) {
+    match parse_message(test_buf, 0, 0x80) {
         Some((Aftertouch{channel : c, key : k, velocity : v}, 3)) => {
             assert!(c == 3);
             assert!(k == 4);
