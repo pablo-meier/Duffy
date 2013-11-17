@@ -1,4 +1,7 @@
 #[feature(struct_variant)];
+#[link(name = "Rust MIDI",
+       vers = "0.1",
+       package_id = "f34701c762288492b2e7f98f36922860")];
 
 /** A library providing functions to read and write files in the MIDI file format. Most of this was
  * taken from the high-level view provided at 
@@ -14,15 +17,12 @@
  * http://www.midi.org/techspecs/midispec.php
  */
 
-#[name = "Rust MIDI"]
-#[vers = "0.1"]
 /// Package ID is name concatenated with vers, separated by space, fed to md5sum
-#[package_id = "f34701c762288492b2e7f98f36922860"]
+#[crate_type = "lib"]
 
 #[desc = "MIDI library for rust. Provides programmatic access to data in MIDI files."]
 #[license = "GPL"]
 #[author = "Paul Meier"]
-#[crate_type = "lib"]
 
 #[warn(non_camel_case_types)]
 
@@ -122,23 +122,25 @@ pub enum MidiMessage {
 pub fn parse_file(filename : &str) -> Option<MidiFile> {
     // Open the file according to the filename
     let path = &Path::new(filename);
-    let mut reader = File::open(&Path::new(filename));
 
-    let mut contents_buf = with_capacity(100);
-    let bytes_read : Option<uint> = reader.read(contents_buf);
-
-    match parse_header(contents_buf) {
-        Some(header) => {
-            match parse_all_tracks(header, contents_buf) {
-                Some(tracks) => {
-                    let new_midifile = MidiFile{header: header, tracks : tracks};
-                    Some(new_midifile)
-                }
-                None => { None }
-            } // match parse_all_tracks
-        }
-        None => { None }
-    } // match parse_header
+    do io_error::cond.trap(|_| {
+        // error on file IO
+        error!("Issue with file!");
+    }).inside {
+        let contents_buf = File::open(path).read_to_end();
+        match parse_header(contents_buf) {
+            Some(header) => {
+                match parse_all_tracks(header, contents_buf) {
+                    Some(tracks) => {
+                        let new_midifile = MidiFile{header: header, tracks : tracks};
+                        Some(new_midifile)
+                    }
+                    None => { None }
+                } // match parse_all_tracks
+            }
+            None => { None }
+        } // match parse_header
+    }
 }
 
 
@@ -170,13 +172,31 @@ fn parse_header(buf : &[u8]) -> Option<MidiHeader> {
 }
 
 /// Parses all the tracks in a MIDI file, read into a buffer.
+// TODO: This is a good candidate for parallel calls, rather than sequential.
 fn parse_all_tracks(header : MidiHeader, buf : &[u8]) -> Option<~[MidiTrack]> {
-    None
+    // Since the header is always constant size, we begin from 14.
+    let mut offset = 14;
+    let mut return_vec = with_capacity(header.num_tracks as uint);
+    let mut error = false;
 
-    // get a list of the offsets from each length.
-    // parallel call parse_track on all of them.
-    // get the response, if all succeed, collect them, else none.
-
+    for _ in range(0, header.num_tracks) {
+        match parse_track(buf, offset) {
+            Some(track) => {
+                let length = track.track_length;
+                return_vec = append_one(return_vec, track);
+                // the '8' is for the header. Make a constant at top-level?
+                offset += (length + 8);
+            }
+            None => {
+                error = true;
+            }
+        }
+    }
+    if error {
+        None
+    } else {
+        Some(return_vec)
+    }
 }
 
 /// Parses an individual track beginning at the specified offset.
@@ -189,7 +209,7 @@ fn parse_track(buf : &[u8], offset : u32) -> Option<MidiTrack> {
         None
     } else {
         let track_size = get_track_size(buf, offset);
-        let mut event_offset = offset + 8;
+        let event_offset = offset + 8;
         let mut midi_events = with_capacity(0);
         let mut error = false;
         let mut cont = ContinueTrackRead { offset : event_offset, last_status : 0x00 };
