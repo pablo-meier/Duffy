@@ -188,14 +188,13 @@ fn parse_track(buf : &[u8], offset : u32) -> Option<MidiTrack> {
         error!("Malformed MIDI header -- first 4 bytes nonstandard, offset is {}", offset);
         None
     } else {
-        // track size
         let track_size = get_track_size(buf, offset);
         let mut event_offset = offset + 8;
         let mut midi_events = with_capacity(0);
         let mut error = false;
         let mut cont = ContinueTrackRead { offset : event_offset, last_status : 0x00 };
-        // events in sequence.
-        while event_offset <= ((offset + 4) + track_size) {
+        // Parse events in sequence.
+        while cont.offset < (event_offset + track_size) {
             match parse_event(buf, cont) {
                 None => {
                     error!("Malformed event, somewhere near offset {}", event_offset);
@@ -205,7 +204,6 @@ fn parse_track(buf : &[u8], offset : u32) -> Option<MidiTrack> {
                 Some((x, new_cont)) => {
                     midi_events = append_one(midi_events, x);
                     cont = new_cont;
-                    event_offset = cont.offset;
                 }
             }
         }
@@ -234,7 +232,7 @@ fn parse_event(buf : &[u8], cont : ContinueTrackRead) -> Option<(MidiEvent, Cont
 // have more safety bits than the simple assert.
 // 
 // A small reminder of how MIDI Events work: you start with the number of ticks, followed by a MIDI
-// message. This parses the ticks, which is variable length.
+// message. This function parses the ticks, which is variable length.
 //
 // The number of ticks can be expressed with at least 1 and at most 4 bytes. All bytes must have a
 // '1' in the highest order position, except the last, which must have a 0. When you've read all the
@@ -617,3 +615,71 @@ fn test_parse_track_all_complete() {
     }
 }
 
+#[test]
+fn test_parse_track_some_ommitted() {
+    // This track contains 4 events: NoteOn, NoteOn, Aftertouch, Aftertouch. Sequential events are
+    // ommitted.
+    let test_buf = [('M' as u8), ('T' as u8), ('r' as u8), ('k' as u8),
+
+        0x00, 0x00, 0x00, 0x0F, // Track length: 15
+
+        0x50,                   // Delta time: 80
+        0x92, 0x05, 0x04,       // NoteOn, channel 2, key 5, velocity 4
+
+        0x83, 0x60,             // Delta time: 480
+        0x26, 0x00,             // Omit status (NoteOn), channel 2, key 38, velocity 0
+
+        0x50,                   // Delta time: 80
+        0xA2, 0x05, 0x04,       // Aftertouch, channel 2, key 5, velocity 4
+
+        0x50,                   // Delta time: 80
+        0x13, 0x05              // Omit status (Aftertouch), channel 2, key 19, velocity 5
+        ];
+
+    match parse_track(test_buf, 0) {
+        Some(track) => {
+            assert!(track.track_length == 15);
+
+            assert!(track.events[0].delta_time == 80);
+            match track.events[0].message {
+                NoteOn{ channel : c, key : k, velocity : v } => {
+                    assert!(c == 2);
+                    assert!(k == 5);
+                    assert!(v == 4);
+                }
+                _ => { assert!(false) }
+            }
+
+            assert!(track.events[1].delta_time == 480);
+            match track.events[1].message {
+                NoteOn{ channel : c, key : k, velocity : v } => {
+                    assert!(c == 2);
+                    assert!(k == 38);
+                    assert!(v == 0);
+                }
+                _ => { assert!(false) }
+            }
+
+            assert!(track.events[2].delta_time == 80);
+            match track.events[2].message {
+                Aftertouch{ channel : c, key : k, velocity : v } => {
+                    assert!(c == 2);
+                    assert!(k == 5);
+                    assert!(v == 4);
+                }
+                _ => { assert!(false) }
+            }
+
+            assert!(track.events[3].delta_time == 80);
+            match track.events[3].message {
+                Aftertouch{ channel : c, key : k, velocity : v } => {
+                    assert!(c == 2);
+                    assert!(k == 19);
+                    assert!(v == 5);
+                }
+                _ => { assert!(false) }
+            }
+        }
+        _ => { assert!(false); }
+    }
+}
