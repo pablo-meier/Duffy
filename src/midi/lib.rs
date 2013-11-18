@@ -1,7 +1,8 @@
 #[feature(struct_variant)];
-#[link(name = "Rust MIDI",
+#[link(name = "midi",
        vers = "0.1",
-       package_id = "f34701c762288492b2e7f98f36922860")];
+       package_id = "bd61bdf8938c3e8a50c7105b949065a1")];
+/// Package ID is name concatenated with vers, separated by space, fed to md5sum
 
 /** A library providing functions to read and write files in the MIDI file format. Most of this was
  * taken from the high-level view provided at 
@@ -17,7 +18,6 @@
  * http://www.midi.org/techspecs/midispec.php
  */
 
-/// Package ID is name concatenated with vers, separated by space, fed to md5sum
 #[crate_type = "lib"]
 
 #[desc = "MIDI library for rust. Provides programmatic access to data in MIDI files."]
@@ -26,13 +26,13 @@
 
 #[warn(non_camel_case_types)]
 
+use std::io::{File, io_error};
 use std::option::{Some, None};
 use std::path::Path;
 use std::vec::{with_capacity, append_one};
-use std::io::{File, io_error};
 
 // TODO:  Write a Rust macro to chain Option<> Pattern matches, so Nones always just return None,
-// but assume you got the other thing?
+// but assume you got the Some(x)?
 // TODO: Parallelize the track reads rather than make it sequential?
 
 
@@ -390,43 +390,71 @@ fn parse_message(buf : &[u8], start_offset : u32, last_status : u8) -> Option<(M
     }
 }
 
-fn is_invalid_status_byte(byte : u8) -> bool {
-    match byte {
-        0 .. 0x7F | 0xF4 | 0xF5 | 0xF7 | 0xF9 => true,
-        _ => false
+// Pretty-print
+pub fn pretty_print(file : MidiFile) {
+    println!("----- MIDI FILE -----");
+    println!("*****\nHeader:");
+
+    let format = file.header.file_format;
+    let num_tracks = file.header.num_tracks;
+    let tpq = file.header.ticks_per_quarter;
+
+    println!("  File format: {}", file_format_to_string(format));
+    println!("  Number of tracks: {}", num_tracks);
+    println!("  Ticks per quarter note: {}", tpq);
+
+    println!("*****\nTracks:");
+
+    let mut track_number = 1;
+    for track in file.tracks.iter() {
+        println!("  Track {}", track_number);
+        println!("  Track length: {}", track.track_length);
+        for event in track.events.iter() {
+            println!("    --");
+            println!("    Delta time: {}", event.delta_time); 
+            println!("    Message: {}", message_to_string(event.message));
+        }
+        track_number += 1;
+    }
+    println!("---------------------");
+}
+
+fn file_format_to_string(f : FileFormat) -> ~str {
+    match f {
+        SingleTrack => format!("Single Track"),
+        MultipleSynchronous => format!("Multiple track, asynchronous"),
+        MultipleAsynchronous => format!("Multiple track, synchronous")
     }
 }
 
+fn message_to_string(m : MidiMessage) -> ~str {
+    match m {
+        NoteOff         { channel : c, key : k, velocity : v } => { format!("NoteOff -- channel: {}, key: {}, velocity: {}", c, k, v) }
+        NoteOn          { channel : c, key : k, velocity : v } => { format!("NoteOn -- channel: {}, key: {}, velocity: {}", c, k, v) }
+        Aftertouch      { channel : c, key : k, velocity : v } => { format!("Aftertouch -- channel: {}, key: {}, velocity: {}", c, k, v) }
+        ControlChange   { channel : ch, controller : c, value : v } => { format!("ControlChange -- channel: {}, controller : {}, value: {}", ch, c, v) }
+        ProgramChange   { channel : c, new_program : p } => { format!("ProgramChange -- channel: {}, new_program: {}", c, p) }
+        ChannelPressure { channel : c, value : v } => { format!("ChannelPressure -- channel: {}, value: {}", c, v) }
+        PitchWheel      { channel : c,  lsb : l, msb : m } => { format!("PitchWheel -- channel: {}, lsb: {}, msb: {}", c, l, m) }
 
-fn get_status_byte(message : MidiMessage) -> u8 {
-    match message {
-        NoteOff         { channel : c, _ } => { 0x80 | c }
-        NoteOn          { channel : c, _ } => { 0x90 | c }
-        Aftertouch      { channel : c, _ } => { 0xA0 | c }
-        ControlChange   { channel : c, _ } => { 0xB0 | c }
-        ProgramChange   { channel : c, _ } => { 0xC0 | c }
-        ChannelPressure { channel : c, _ } => { 0xD0 | c }
-        PitchWheel      { channel : c, _ } => { 0xE0 | c }
-
-        SystemExclusive     {_} => { 0xF0 }
-        MidiTimeCode        {_} => { 0xF1 }
-        SongPositionPointer {_} => { 0xF2 }
-        SongSelect          {_} => { 0xF3 }
-        TuneRequest             => { 0xF6 }
-        MidiClock               => { 0xF8 }
-        MidiStart               => { 0xFA }
-        MidiContinue            => { 0xFB }
-        MidiStop                => { 0xFC }
-        ActiveSense             => { 0xFE }
-        Reset                   => { 0xFF }
+        SystemExclusive     {_} => { format!("SystemExclusive") }
+        MidiTimeCode        {_} => { format!("MidiTimeCode") }
+        SongPositionPointer {_} => { format!("SongPositionPointer") }
+        SongSelect          {_} => { format!("SongSelect") }
+        TuneRequest             => { format!("Tune Request") }
+        MidiClock               => { format!("Midi Clock") }
+        MidiStart               => { format!("Midi Start") }
+        MidiContinue            => { format!("Midi Continue") }
+        MidiStop                => { format!("Midi Stop") }
+        ActiveSense             => { format!("Active Sense") }
+        Reset                   => { format!("Reset") }
         // InvalidStatus gets an invalid Midi Message, but only for completeness.
         // Should never happen.
-        _ => { 0xFD }
+        _ => { format!("Failed to match message.") }
     }
 }
 
 // Helper functions
-
 // In C, I'd memcpy two uint8 bytes into a pointer to a uint16, but give there's no
 // memcpy here (well, without `unsafe`) I'm using silly bit tricks to do number conversions.
 // Got these from how Rust io::net parses IP addresses.
@@ -462,12 +490,52 @@ fn lower_seven_bits(number : u8) -> u8 {
     number & 0b01111111
 }
 
+fn is_invalid_status_byte(byte : u8) -> bool {
+    match byte {
+        0 .. 0x7F | 0xF4 | 0xF5 | 0xF7 | 0xF9 => true,
+        _ => false
+    }
+}
+
+
+fn get_status_byte(message : MidiMessage) -> u8 {
+    match message {
+        NoteOff         { channel : c, _ } => { 0x80 | c }
+        NoteOn          { channel : c, _ } => { 0x90 | c }
+        Aftertouch      { channel : c, _ } => { 0xA0 | c }
+        ControlChange   { channel : c, _ } => { 0xB0 | c }
+        ProgramChange   { channel : c, _ } => { 0xC0 | c }
+        ChannelPressure { channel : c, _ } => { 0xD0 | c }
+        PitchWheel      { channel : c, _ } => { 0xE0 | c }
+
+        SystemExclusive     {_} => { 0xF0 }
+        MidiTimeCode        {_} => { 0xF1 }
+        SongPositionPointer {_} => { 0xF2 }
+        SongSelect          {_} => { 0xF3 }
+        TuneRequest             => { 0xF6 }
+        MidiClock               => { 0xF8 }
+        MidiStart               => { 0xFA }
+        MidiContinue            => { 0xFB }
+        MidiStop                => { 0xFC }
+        ActiveSense             => { 0xFE }
+        Reset                   => { 0xFF }
+        // InvalidStatus gets an invalid Midi Message, but only for completeness.
+        // Should never happen.
+        _ => { 0xFD }
+    }
+}
+
 
 // Writing
 // Undefined for now, since we just want to read.
 
 
-//Tests!
+
+// Tests!
+// Note that for tests that test external-facing definitions (mostly, parse_file), we should be
+// writing that in a separate file called `test.rs` that imports these definitions. The following
+// are just tests for the internal functions -- parse_ticks, parse_tracks, etc.
+
 #[test]
 fn test_parse_header_standard() {
    let test1 = [0x4D, 0x54, 0x68, 0x64, 0x00, 0x00, 0x00, 0x06,
