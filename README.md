@@ -10,6 +10,10 @@ concept I did in college and resurrect it, taking advantage of a few years of
 maturity. See the bit on "backstory, nostalgia" below. The "Options" section is
 mostly for what I'm hoping to do with it as I write more of it.
 
+**Where are we?** Just started -- it parses _the most basic_ MIDI files, but not
+anything that's circulating due to the many formats MIDI can take. But it's
+passing tests, so it's on its way.
+
 ---
 
 Duffy takes a MIDI file as input, and produces a set of bash scripts for each
@@ -60,14 +64,14 @@ Back in college, [Saurya][1] and I often pranked each other, or other students
 in [the SunLab][2]. Among the typical hijinx (someone leaves a computer
 unlocked, `alias lsplease="/bin/ls" && alias ls="echo \"lolno, say lsplease\""`)
 the most popular of these was a little Scheme script I wrote to consume a monophanous
-[LilyPond][3] file and product a bash script calling the Unix 'beep' command in
+[LilyPond][3] file and produce a bash script calling the Unix `beep` command in
 the melody of the input file.
 
 So for example, you could write
 
     d8 d e4 d g fis2 d8 d e4 d a' g2
 
-Which Lilypond would write [as this][8]. My script would then produce:
+Which Lilypond would output [as this][8]. My script would then produce:
 
     #!/bin/bash
     #
@@ -88,8 +92,8 @@ Which Lilypond would write [as this][8]. My script would then produce:
 
 Which you could execute in a SunLab computer. For good or ill, [Max Salvas'][4]
 computers (MAX BUILT) had PC speakers in the chassis, so you could remotely log
-into someone else's machine, run the script, and from the box under their desk
-they'd hear whatever you played them.
+into someone else's machine, run the script, and they'd hear whatever you played
+them from the box under their desk.
 
 Saurya then wrote a script to scan a room in the building for all its computers
 (TA lab, SunLab, etc.) and run an arbitrary script on all of them at the same
