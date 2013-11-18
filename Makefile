@@ -1,20 +1,16 @@
 # Yay Rust!
 
-MIDI_NAME="midi"
-
 BIN_DIR=bin
 BUILD_DIR=build
 
 
 build: prepare
-	rustpkg build $(MIDI_NAME)
+	rustpkg build midi
+	rustpkg build duffy
 
 test: build
 	rustc --test -o bin/test-midi src/midi/lib.rs
 	./bin/test-midi
-
-run: build
-	$(BUILD_DIR)/main la-overworld.mid
 
 clean:
 	 rm -rf $(BUILD_DIR)
