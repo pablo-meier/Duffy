@@ -69,7 +69,7 @@ So for example, you could write
 
 Which Lilypond would write to this:
 
-![image of lilypond markup](paul-meier.github.io/Duffy/pages/lily-output.png)
+![image of lilypond markup](http://paul-meier.github.io/Duffy/pages/lily-output.png)
 
 and my script would produce:
 
