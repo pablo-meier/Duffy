@@ -67,6 +67,10 @@ So for example, you could write
 
     d8 d e4 d g fis2 d8 d e4 d a' g2
 
+Which Lilypond would write to this:
+
+![image of lilypond markup](http://paul-meier.github.io/Duffy/pages/lily-output.png)
+
 and my script would produce:
 
     #!/bin/bash
