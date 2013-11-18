@@ -67,11 +67,7 @@ So for example, you could write
 
     d8 d e4 d g fis2 d8 d e4 d a' g2
 
-Which Lilypond would write to this:
-
-![image of lilypond markup](http://paul-meier.github.io/Duffy/pages/lily-output.png)
-
-and my script would produce:
+Which Lilypond would write [as this][8]. My script would then produce:
 
     #!/bin/bash
     #
@@ -119,3 +115,4 @@ Etsy for the name :)
    [5]: http://www.quotefully.com/tvshow/30+Rock/Dennis+Duffy
    [6]: https://twitter.com/uccero/status/398165936827412480
    [7]: http://www.johnath.com/beep/
+   [8]: http://paul-meier.github.io/Duffy/pages/lily-output.png
